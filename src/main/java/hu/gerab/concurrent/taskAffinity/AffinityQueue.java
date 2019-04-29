@@ -7,10 +7,12 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
@@ -26,7 +28,7 @@ import java.util.function.BiFunction;
  *
  * @param <R>
  */
-class AffinityQueue<R extends Runnable> implements BlockingQueue<R> {
+class AffinityQueue<R> implements BlockingQueue<R> {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AffinityQueue.class);
 
@@ -35,14 +37,18 @@ class AffinityQueue<R extends Runnable> implements BlockingQueue<R> {
     private final Striped<Lock> insertLocks;
 
     private final ConcurrentHashMap<String, AffinityContext<R>> affinityIdToContextMap = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<Long, AffinityContext<R>> threadIdToContextMap = new ConcurrentHashMap<>();
+    private final List<AffinityContext<R>> contexts = new CopyOnWriteArrayList<>();
+    private final ThreadLocal<AffinityContext<R>> threadContext = ThreadLocal.withInitial(() -> {
+        AffinityContext<R> affinityContext = new AffinityContext<>();
+        contexts.add(affinityContext);
+        return affinityContext;
+    });
 
     public AffinityQueue(int threadCount) {
         // we don't wanna create a lock for each affinity group as that could be a huge amount ->
         // instead we have a reasonable amount of locks that will be used when accessing affinity groups
         insertLocks = Striped.lock(threadCount * 4);
     }
-
 
     @Override
     public void put(R r) throws InterruptedException {
@@ -147,18 +153,13 @@ class AffinityQueue<R extends Runnable> implements BlockingQueue<R> {
     }
 
     private Optional<AffinityContext<R>> getIdleContext() {
-        return threadIdToContextMap.values().stream().unordered()
-                .filter(c -> c.isWaiting() && c.getQueue().isEmpty())
+        return contexts.stream().parallel()
+                .filter(AffinityContext::isWaiting)
                 .findAny();
     }
 
     private AffinityContext<R> getContextForThread() {
-        long id = Thread.currentThread().getId();
-        return threadIdToContextMap.computeIfAbsent(id, AffinityContext::new);
-    }
-
-    private BlockingQueue<R> getQueueForThread() {
-        return getContextForThread().getQueue();
+        return threadContext.get();
     }
 
     //////////////////////////////////// task retrieval ////////////////////////////////////////////
@@ -176,9 +177,6 @@ class AffinityQueue<R extends Runnable> implements BlockingQueue<R> {
                     }
                 }
             }
-        }
-        if (queue.isEmpty()) {
-            context.setWaiting(true);
         }
     }
 
@@ -219,11 +217,15 @@ class AffinityQueue<R extends Runnable> implements BlockingQueue<R> {
 
     private R get(InterruptibleFunction<BlockingQueue<R>, R> operation) {
         AffinityContext<R> context = getContextForThread();
+        BlockingQueue<R> queue = context.getQueue();
         int loopcounter = 0;
         while (true) { // we exit the loop with the return statement
             fillQueueIfEmpty(context);
+            if (queue.isEmpty()) {
+                context.setWaiting(true);
+            }
             try {
-                R r = operation.apply(context.getQueue());
+                R r = operation.apply(queue);
                 context.setWaiting(false);
                 LOGGER.trace("Get for thread={}, result={}", context.getName(), r);
                 if (r instanceof AffinityAware && ((AffinityAware) r).isLast()) {
@@ -283,12 +285,14 @@ class AffinityQueue<R extends Runnable> implements BlockingQueue<R> {
 
     @Override
     public int size() {
-        return getQueueForThread().size();
+        return sharedQueue.size()
+                + contexts.stream().mapToInt(AffinityContext::size).sum();
     }
 
     @Override
     public boolean isEmpty() {
-        return getQueueForThread().isEmpty();
+        return sharedQueue.isEmpty()
+                && contexts.stream().allMatch(AffinityContext::isEmpty);
     }
 
     @Override
@@ -356,8 +360,7 @@ class AffinityQueue<R extends Runnable> implements BlockingQueue<R> {
     public String toString() {
         return "AffinityQueue{" +
                 "sharedQueueSize=" + sharedQueue.size() +
-                ", contextCount=" + affinityIdToContextMap.size() +
-                ", affinityGroupCount=" + threadIdToContextMap.size() +
+                ", affinityGroupCount=" + affinityIdToContextMap.size() +
                 '}';
     }
 }

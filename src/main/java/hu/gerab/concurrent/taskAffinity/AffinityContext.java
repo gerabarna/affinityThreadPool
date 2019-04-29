@@ -7,12 +7,8 @@ class AffinityContext<R> implements Comparable<AffinityContext> {
 
     private String name;
     private BlockingQueue<R> threadQueue = new LinkedBlockingQueue<>();
-    private boolean waiting = true;
+    private volatile boolean waiting = true;
     private final Thread thread;
-
-    protected AffinityContext(long threadId) {
-        this();
-    }
 
     protected AffinityContext() {
         thread = Thread.currentThread();
@@ -39,6 +35,14 @@ class AffinityContext<R> implements Comparable<AffinityContext> {
 
     public BlockingQueue<R> getQueue() {
         return threadQueue;
+    }
+
+    public boolean isEmpty() {
+        return threadQueue.isEmpty();
+    }
+
+    public int size() {
+        return threadQueue.size();
     }
 
     public boolean isWaiting() {

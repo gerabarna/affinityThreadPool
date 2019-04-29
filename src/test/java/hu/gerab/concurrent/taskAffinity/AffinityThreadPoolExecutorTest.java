@@ -3,7 +3,6 @@ package hu.gerab.concurrent.taskAffinity;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 import org.hamcrest.CustomMatcher;
-import org.hamcrest.Matchers;
 import org.junit.Before;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -22,12 +21,9 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeoutException;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static org.hamcrest.MatcherAssert.*;
-import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.hasProperty;
 import static org.hamcrest.Matchers.lessThan;
-import static org.hamcrest.Matchers.not;
 
 public class AffinityThreadPoolExecutorTest {
 
