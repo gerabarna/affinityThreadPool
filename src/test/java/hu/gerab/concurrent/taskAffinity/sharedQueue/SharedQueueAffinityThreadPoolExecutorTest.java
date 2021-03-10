@@ -1,13 +1,12 @@
-package hu.gerab.concurrent.taskAffinity;
+package hu.gerab.concurrent.taskAffinity.sharedQueue;
+
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.lessThan;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-
-import org.hamcrest.CustomMatcher;
-import org.junit.Before;
-import org.junit.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
+import hu.gerab.concurrent.taskAffinity.TestData;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Queue;
@@ -19,31 +18,17 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeoutException;
+import org.junit.Before;
+import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import static java.util.concurrent.TimeUnit.SECONDS;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.equalTo;
-import static org.hamcrest.Matchers.lessThan;
+public class SharedQueueAffinityThreadPoolExecutorTest {
 
-public class AffinityThreadPoolExecutorTest {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(AffinityThreadPoolExecutorTest.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(SharedQueueAffinityThreadPoolExecutorTest.class);
     private ThreadFactory threadFactory;
     private Queue<Future<TestData>> futures;
     private Queue<TestData> dataList;
-
-    private static class TestData {
-
-        private String threadName;
-        private String affinityGroup;
-        private int serial;
-
-        public TestData(String affinityGroup, int serial) {
-            this.threadName = Thread.currentThread().getName();
-            this.affinityGroup = affinityGroup;
-            this.serial = serial;
-        }
-    }
 
     @Before
     public void setUp() throws Exception {
@@ -56,7 +41,7 @@ public class AffinityThreadPoolExecutorTest {
 
     @Test
     public void testNormalRunnableDoesntThrow() throws Exception {
-        ExecutorService executorService = new AffinityThreadPoolExecutor(1, threadFactory);
+        ExecutorService executorService = new SharedQueueAffinityThreadPoolExecutor(1, threadFactory);
 
         for (int i = 0; i <= 10; i++) {
             executorService.submit(createRunnableTask("Mike", i));
@@ -69,7 +54,7 @@ public class AffinityThreadPoolExecutorTest {
 
     @Test
     public void testSingleProducerSingleConsumer() throws Exception {
-        ExecutorService executorService = new AffinityThreadPoolExecutor(1, threadFactory);
+        ExecutorService executorService = new SharedQueueAffinityThreadPoolExecutor(1, threadFactory);
 
         int limit = 10;
         for (int i = 0; i <= limit; i++) {
@@ -85,7 +70,7 @@ public class AffinityThreadPoolExecutorTest {
 
     @Test
     public void testSingleProducerMultiConsumer() throws Exception {
-        ExecutorService executorService = new AffinityThreadPoolExecutor(10, threadFactory);
+        ExecutorService executorService = new SharedQueueAffinityThreadPoolExecutor(10, threadFactory);
 
         int limit = 10;
         for (int i = 0; i <= limit; i++) {
@@ -104,7 +89,7 @@ public class AffinityThreadPoolExecutorTest {
 
     @Test
     public void testSingleProducerMultiConsumerWithNormalRunnables() throws Exception {
-        ExecutorService executorService = new AffinityThreadPoolExecutor(10, threadFactory);
+        ExecutorService executorService = new SharedQueueAffinityThreadPoolExecutor(10, threadFactory);
 
         int limit = 10;
         for (int i = 0; i <= limit; i++) {
@@ -128,7 +113,7 @@ public class AffinityThreadPoolExecutorTest {
 
     @Test
     public void testMultiProducerMultiConsumer() throws Exception {
-        ExecutorService executorService = new AffinityThreadPoolExecutor(10, threadFactory);
+        ExecutorService executorService = new SharedQueueAffinityThreadPoolExecutor(10, threadFactory);
 
         executorService.submit(createProducerTask(executorService, 10, "Mike"));
         executorService.submit(createProducerTask(executorService, 10, "Leo"));
@@ -143,30 +128,9 @@ public class AffinityThreadPoolExecutorTest {
         assertResultOrder();
     }
 
-    private class OddMathcer extends CustomMatcher<Number> {
-
-        public OddMathcer() {
-            this("Expected an even number");
-        }
-
-        public OddMathcer(String description) {
-            super(description);
-        }
-
-        @Override
-        public boolean matches(Object o) {
-            if (o instanceof Number) {
-                if (o instanceof Short || o instanceof Integer || o instanceof Long) {
-                    return ((long) ((Number) o) % 2) == 1;
-                }
-            }
-            return false;
-        }
-    }
-
     @Test
     public void testCancelQueued() throws Exception {
-        ExecutorService executorService = new AffinityThreadPoolExecutor(3, threadFactory);
+        ExecutorService executorService = new SharedQueueAffinityThreadPoolExecutor(3, threadFactory);
 
         for (int i = 0; i < 3; i++) {
             executorService.submit(() -> {
@@ -190,8 +154,8 @@ public class AffinityThreadPoolExecutorTest {
         }
         joinWithCancel();
         assertResultOrder();
-        assertThat(dataList.stream().filter(td -> td.serial % 2 == 0).count(), equalTo(0L));
-        assertThat(dataList.stream().filter(td -> td.serial % 2 == 1).count(), equalTo(15L));
+        assertThat(dataList.stream().filter(td -> td.getSerial() % 2 == 0).count(), equalTo(0L));
+        assertThat(dataList.stream().filter(td -> td.getSerial() % 2 == 1).count(), equalTo(15L));
     }
 
     private Runnable createProducerTask(ExecutorService executorService, int taskCount, String affinityGroup) {
@@ -222,15 +186,15 @@ public class AffinityThreadPoolExecutorTest {
     private void assertResultOrder() {
         Map<String, TestData> affinityGroupToDataMap = new HashMap<>();
         for (TestData testData : dataList) {
-            TestData oldData = affinityGroupToDataMap.put(testData.affinityGroup, testData);
+            TestData oldData = affinityGroupToDataMap.put(testData.getAffinityGroup(), testData);
             if (oldData != null) {
-                assertThat("Incorrect order detected for group=" + testData.affinityGroup, oldData.serial, lessThan(testData.serial));
-                assertThat("Thread change detected for group=" + testData.affinityGroup, oldData.threadName, equalTo(testData.threadName));
+                assertThat("Incorrect order detected for group=" + testData.getAffinityGroup(), oldData.getSerial(), lessThan(testData.getSerial()));
+                assertThat("Thread change detected for group=" + testData.getAffinityGroup(), oldData.getThreadName(), equalTo(testData.getThreadName()));
             }
         }
     }
 
-    private abstract class TestAffinityTask implements AffinityTask, Callable<TestData> {
+    private abstract class TestAffinityTask implements SharedQueueAffinityTask, Callable<TestData> {
 
         protected String affinityGroup;
         protected int count;

@@ -1,10 +1,10 @@
-package hu.gerab.concurrent.taskAffinity;
+package hu.gerab.concurrent.taskAffinity.sharedQueue;
 
 import java.util.concurrent.Callable;
 
-public interface AffinityTask extends AffinityAware {
+public interface SharedQueueAffinityTask extends SharedQueueAffinityAware {
 
-    abstract class AbstractAffinityTask<T> implements AffinityTask {
+    abstract class AbstractAffinityTask<T> implements SharedQueueAffinityTask {
 
         protected String affinityId;
         protected boolean last;

@@ -1,10 +1,7 @@
-package hu.gerab.concurrent.taskAffinity;
+package hu.gerab.concurrent.taskAffinity.sharedQueue;
 
 import com.google.common.util.concurrent.Striped;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
+import hu.gerab.concurrent.taskAffinity.InterruptibleFunction;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
@@ -17,16 +14,15 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.function.BiFunction;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * This queue is designed to be used together with {@link AffinityThreadPoolExecutor} and it's main
- * goal is to enforce affinity between {@link AffinityAware} runnables.
- * The queue internally maintains a separate task queue for each thread and a shared queue for unknown
- * affinity groups ( newly incoming ). Each thread will first consume its own queue and only look at
- * the shared queue if it's own queue is empty. This potentially could cause tasks belonging 'new'
- * ( unassigned ) affinity groups to be delayed
- *
- * @param <R>
+ * This queue is designed to be used together with {@link SharedQueueAffinityThreadPoolExecutor} and it's main goal is
+ * to enforce affinity between {@link SharedQueueAffinityAware} runnables. The queue internally maintains a separate
+ * task queue for each thread and a shared queue for unknown affinity groups ( newly incoming ). Each thread will first
+ * consume its own queue and only look at the shared queue if it's own queue is empty. This potentially could cause
+ * tasks belonging 'new' ( unassigned ) affinity groups to be delayed
  */
 class AffinityQueue<R> implements BlockingQueue<R> {
 
@@ -36,10 +32,10 @@ class AffinityQueue<R> implements BlockingQueue<R> {
 
     private final Striped<Lock> insertLocks;
 
-    private final ConcurrentHashMap<String, AffinityContext<R>> affinityIdToContextMap = new ConcurrentHashMap<>();
-    private final List<AffinityContext<R>> contexts = new CopyOnWriteArrayList<>();
-    private final ThreadLocal<AffinityContext<R>> threadContext = ThreadLocal.withInitial(() -> {
-        AffinityContext<R> affinityContext = new AffinityContext<>();
+    private final ConcurrentHashMap<String, SharedQueueAffinityContext<R>> affinityIdToContextMap = new ConcurrentHashMap<>();
+    private final List<SharedQueueAffinityContext<R>> contexts = new CopyOnWriteArrayList<>();
+    private final ThreadLocal<SharedQueueAffinityContext<R>> threadContext = ThreadLocal.withInitial(() -> {
+        SharedQueueAffinityContext<R> affinityContext = new SharedQueueAffinityContext<>();
         contexts.add(affinityContext);
         return affinityContext;
     });
@@ -61,7 +57,7 @@ class AffinityQueue<R> implements BlockingQueue<R> {
         Lock insertLock = insertLocks.get(affinityId);
         try {
             insertLock.lock();
-            AffinityContext context = affinityIdToContextMap.get(affinityId);
+            SharedQueueAffinityContext context = affinityIdToContextMap.get(affinityId);
             BlockingQueue<R> q = context == null ? sharedQueue : context.getQueue();
             LOGGER.trace("Put for context={}, result={}", context, r);
             put(r, q, affinityId);
@@ -80,7 +76,7 @@ class AffinityQueue<R> implements BlockingQueue<R> {
         Lock insertLock = insertLocks.get(affinityId);
         try {
             insertLock.lock();
-            AffinityContext context = affinityIdToContextMap.get(affinityId);
+            SharedQueueAffinityContext context = affinityIdToContextMap.get(affinityId);
             BlockingQueue<R> q = context == null ? sharedQueue : context.getQueue();
             LOGGER.trace("Put for context={}, result={}", context, r);
             return offer(r, q, timeout, unit, affinityId);
@@ -97,7 +93,7 @@ class AffinityQueue<R> implements BlockingQueue<R> {
         Lock insertLock = insertLocks.get(affinityId);
         try {
             insertLock.lock();
-            AffinityContext context = affinityIdToContextMap.get(affinityId);
+            SharedQueueAffinityContext context = affinityIdToContextMap.get(affinityId);
             BlockingQueue<R> q = context == null ? sharedQueue : context.getQueue();
             LOGGER.trace("Insert for context={}, result={}", context, r);
             return insert(r, q, operation, affinityId);
@@ -134,8 +130,8 @@ class AffinityQueue<R> implements BlockingQueue<R> {
     }
 
     private String getAffinityId(R a) {
-        if (a instanceof AffinityAware) {
-            return ((AffinityAware) a).getAffinityId();
+        if (a instanceof SharedQueueAffinityAware) {
+            return ((SharedQueueAffinityAware) a).getAffinityId();
         }
         return null;
     }
@@ -144,33 +140,33 @@ class AffinityQueue<R> implements BlockingQueue<R> {
         if (affinityId == null || insertedQueue == sharedQueue) {
             // This might return a thread that is currently still running it's last task, but that should not
             // be a problem as tasks will try to get a new task again after they have finished their previous one
-            getIdleContext().ifPresent(AffinityContext::interrupt);
+            getIdleContext().ifPresent(SharedQueueAffinityContext::interrupt);
         }
     }
 
     private BlockingQueue<R> noAffinityQueue() {
-        return getIdleContext().map(AffinityContext::getQueue).orElse(sharedQueue);
+        return getIdleContext().map(SharedQueueAffinityContext::getQueue).orElse(sharedQueue);
     }
 
-    private Optional<AffinityContext<R>> getIdleContext() {
+    private Optional<SharedQueueAffinityContext<R>> getIdleContext() {
         return contexts.stream().parallel()
-                .filter(AffinityContext::isWaiting)
+                .filter(SharedQueueAffinityContext::isWaiting)
                 .findAny();
     }
 
-    private AffinityContext<R> getContextForThread() {
+    private SharedQueueAffinityContext<R> getContextForThread() {
         return threadContext.get();
     }
 
     //////////////////////////////////// task retrieval ////////////////////////////////////////////
 
-    private void fillQueueIfEmpty(AffinityContext<R> context) {
+    private void fillQueueIfEmpty(SharedQueueAffinityContext<R> context) {
         BlockingQueue<R> queue = context.getQueue();
         if (queue.isEmpty() && !sharedQueue.isEmpty()) {
             synchronized (sharedQueue) {
                 R r = sharedQueue.poll();
                 if (r != null) {
-                    if (r instanceof AffinityAware) {
+                    if (r instanceof SharedQueueAffinityAware) {
                         acquireNewAffintyGroup(context, r);
                     } else {
                         queue.offer(r);
@@ -180,13 +176,13 @@ class AffinityQueue<R> implements BlockingQueue<R> {
         }
     }
 
-    private void acquireNewAffintyGroup(AffinityContext<R> context, R r) {
+    private void acquireNewAffintyGroup(SharedQueueAffinityContext<R> context, R r) {
         BlockingQueue<R> queue = context.getQueue();
-        String affinityId = ((AffinityAware) r).getAffinityId();
+        String affinityId = ((SharedQueueAffinityAware) r).getAffinityId();
         Lock insertLock = insertLocks.get(affinityId);
         insertLock.lock();
         try {
-            AffinityContext previous = affinityIdToContextMap.put(affinityId, context);
+            SharedQueueAffinityContext previous = affinityIdToContextMap.put(affinityId, context);
             if (previous != null) {
                 LOGGER.warn("Affinity context override from={}, to={}", previous.getName(), context.getName());
             }
@@ -201,22 +197,16 @@ class AffinityQueue<R> implements BlockingQueue<R> {
         Iterator<R> iterator = sharedQueue.iterator();
         while (iterator.hasNext()) {
             R task = iterator.next();
-            if (task instanceof AffinityAware
-                    && ((AffinityAware) task).getAffinityId().equals(affinityId)) {
+            if (task instanceof SharedQueueAffinityAware
+                    && ((SharedQueueAffinityAware) task).getAffinityId().equals(affinityId)) {
                 iterator.remove();
                 queue.offer(task);
             }
         }
     }
 
-    @FunctionalInterface
-    public interface InterruptibleFunction<T, R> {
-
-        R apply(T t) throws InterruptedException;
-    }
-
     private R get(InterruptibleFunction<BlockingQueue<R>, R> operation) {
-        AffinityContext<R> context = getContextForThread();
+        SharedQueueAffinityContext<R> context = getContextForThread();
         BlockingQueue<R> queue = context.getQueue();
         int loopcounter = 0;
         while (true) { // we exit the loop with the return statement
@@ -228,8 +218,8 @@ class AffinityQueue<R> implements BlockingQueue<R> {
                 R r = operation.apply(queue);
                 context.setWaiting(false);
                 LOGGER.trace("Get for thread={}, result={}", context.getName(), r);
-                if (r instanceof AffinityAware && ((AffinityAware) r).isLast()) {
-                    String affinityId = ((AffinityAware) r).getAffinityId();
+                if (r instanceof SharedQueueAffinityAware && ((SharedQueueAffinityAware) r).isLast()) {
+                    String affinityId = ((SharedQueueAffinityAware) r).getAffinityId();
                     Lock lock = insertLocks.get(affinityId);
                     try {
                         lock.lock();
@@ -286,13 +276,13 @@ class AffinityQueue<R> implements BlockingQueue<R> {
     @Override
     public int size() {
         return sharedQueue.size()
-                + contexts.stream().mapToInt(AffinityContext::size).sum();
+                + contexts.stream().mapToInt(SharedQueueAffinityContext::size).sum();
     }
 
     @Override
     public boolean isEmpty() {
         return sharedQueue.isEmpty()
-                && contexts.stream().allMatch(AffinityContext::isEmpty);
+                && contexts.stream().allMatch(SharedQueueAffinityContext::isEmpty);
     }
 
     @Override

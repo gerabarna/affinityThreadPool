@@ -1,23 +1,24 @@
-package hu.gerab.concurrent.taskAffinity;
+package hu.gerab.concurrent.taskAffinity.sharedQueue;
 
+import hu.gerab.concurrent.taskAffinity.AffinityAware;
 import java.util.concurrent.Callable;
 import java.util.concurrent.FutureTask;
 
-class AffinityFutureTask<V> extends FutureTask<V> implements AffinityAware {
+class SharedQueueAffinityFutureTask<V> extends FutureTask<V> implements SharedQueueAffinityAware {
 
-    private AffinityAware affinityAware;
+    private SharedQueueAffinityAware affinityAware;
 
-    public AffinityFutureTask(Callable<V> callable) {
+    public SharedQueueAffinityFutureTask(Callable<V> callable) {
         super(callable);
-        if (callable instanceof AffinityAware) {
-            affinityAware = (AffinityAware) callable;
+        if (callable instanceof SharedQueueAffinityAware) {
+            affinityAware = (SharedQueueAffinityAware) callable;
         }
     }
 
-    public AffinityFutureTask(Runnable runnable, V result) {
+    public SharedQueueAffinityFutureTask(Runnable runnable, V result) {
         super(runnable, result);
-        if (runnable instanceof AffinityAware) {
-            affinityAware = (AffinityAware) runnable;
+        if (runnable instanceof SharedQueueAffinityAware) {
+            affinityAware = (SharedQueueAffinityAware) runnable;
         }
     }
 

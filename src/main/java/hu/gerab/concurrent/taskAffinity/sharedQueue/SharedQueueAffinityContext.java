@@ -1,22 +1,22 @@
-package hu.gerab.concurrent.taskAffinity;
+package hu.gerab.concurrent.taskAffinity.sharedQueue;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
-class AffinityContext<R> implements Comparable<AffinityContext> {
+class SharedQueueAffinityContext<R> implements Comparable<SharedQueueAffinityContext> {
 
     private String name;
     private BlockingQueue<R> threadQueue = new LinkedBlockingQueue<>();
     private volatile boolean waiting = true;
     private final Thread thread;
 
-    protected AffinityContext() {
+    protected SharedQueueAffinityContext() {
         thread = Thread.currentThread();
         name = thread.getName();
     }
 
     @Override
-    public int compareTo(AffinityContext o) {
+    public int compareTo(SharedQueueAffinityContext o) {
         return Integer.compare(threadQueue.size(), o.threadQueue.size());
     }
 
